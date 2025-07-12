@@ -19,15 +19,15 @@ table = dynamodb.Table('Facturas')
 http = urllib3.PoolManager()
 
 # URLs de las lambdas (configurar como variables de entorno)
-USUARIO_LAMBDA_URL = os.environ.get('USUARIO_LAMBDA_URL', 'https://tu-api-gateway-id.execute-api.us-east-1.amazonaws.com/dev/usuario')
-PRODUCTO_LAMBDA_URL = os.environ.get('PRODUCTO_LAMBDA_URL', 'https://tu-api-gateway-id.execute-api.us-east-1.amazonaws.com/dev/producto')
+USUARIO_LAMBDA_URL = os.environ.get('USUARIO_LAMBDA_URL', 'https://7q0ekap8l8.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener')
+PRODUCTO_LAMBDA_URL = os.environ.get('PRODUCTO_LAMBDA_URL', 'https://3hy80u5ihe.execute-api.us-east-1.amazonaws.com/dev')
 
 def obtener_datos_usuario(usuario_id, tenant_id):
     """Obtiene datos del usuario desde otra función Lambda"""
     try:
         body = json.dumps({
-            'tenant_id': tenant_id,
-            'usuario_id': usuario_id
+            'empresa': tenant_id,
+            'id': usuario_id
         })
         
         response = http.request(
@@ -56,8 +56,8 @@ def obtener_datos_producto(producto_id, tenant_id):
     """Obtiene datos del producto desde otra función Lambda"""
     try:
         body = json.dumps({
-            'tenant_id': tenant_id,
-            'producto_id': producto_id
+            'empresa': tenant_id,
+            'id_producto': producto_id
         })
         
         response = http.request(
@@ -144,7 +144,7 @@ def lambda_handler(event, context):
                     'body': json.dumps({
                         'error': 'Body no es JSON válido',
                         'raw_body': event['body']
-                    })
+                    }, indent=2, ensure_ascii=False)
                 }
         else:
             # Caso invocación directa (sin API Gateway)
@@ -165,7 +165,7 @@ def lambda_handler(event, context):
                     'body': json.dumps({
                         'error': f'Campo requerido faltante: {campo}',
                         'body_keys': list(body.keys())
-                    })
+                    }, indent=2, ensure_ascii=False)
                 }
 
         # Continuar con el procesamiento normal
@@ -248,7 +248,7 @@ def lambda_handler(event, context):
                 'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*'
             },
-            'body': json.dumps(factura_creada, default=decimal_default)
+            'body': json.dumps(factura_creada, default=decimal_default, indent=2, ensure_ascii=False)
         }
 
     except Exception as e:
@@ -259,5 +259,5 @@ def lambda_handler(event, context):
                 'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*'
             },
-            'body': json.dumps({'error': f"Error inesperado: {str(e)}"})
+            'body': json.dumps({'error': f"Error inesperado: {str(e)}"}, indent=2, ensure_ascii=False)
         }

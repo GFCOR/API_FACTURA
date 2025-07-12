@@ -49,21 +49,37 @@ def lambda_handler(event, context):
         if isinstance(facturas, dict) and 'error' in facturas:
             return {
                 'statusCode': 500,
-                'body': json.dumps(facturas)
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps(facturas, indent=2, ensure_ascii=False)
             }
 
         return {
             'statusCode': 200,
-            'body': json.dumps(facturas)
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps(facturas, indent=2, ensure_ascii=False, default=str)
         }
 
     except KeyError as e:
         return {
             'statusCode': 400,
-            'body': json.dumps({'error': f'Campo requerido faltante: {str(e)}'})
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': f'Campo requerido faltante: {str(e)}'}, indent=2, ensure_ascii=False)
         }
     except Exception as e:
         return {
             'statusCode': 500,
-            'body': json.dumps({'error': f"Error al listar las facturas: {str(e)}"})
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': f"Error al listar las facturas: {str(e)}"}, indent=2, ensure_ascii=False)
         }

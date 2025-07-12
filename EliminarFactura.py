@@ -46,21 +46,37 @@ def lambda_handler(event, context):
         if 'error' in resultado:
             return {
                 'statusCode': 404 if 'no encontrada' in resultado['error'] else 500,
-                'body': json.dumps({'error': resultado['error']})
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'error': resultado['error']}, indent=2, ensure_ascii=False)
             }
 
         return {
             'statusCode': 200,
-            'body': json.dumps({'message': 'Factura eliminada correctamente'})
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'message': 'Factura eliminada correctamente'}, indent=2, ensure_ascii=False)
         }
 
     except KeyError as e:
         return {
             'statusCode': 400,
-            'body': json.dumps({'error': f'Campo requerido faltante: {str(e)}'})
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': f'Campo requerido faltante: {str(e)}'}, indent=2, ensure_ascii=False)
         }
     except Exception as e:
         return {
             'statusCode': 500,
-            'body': json.dumps({'error': f"Error al eliminar la factura: {str(e)}"})
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': f"Error al eliminar la factura: {str(e)}"}, indent=2, ensure_ascii=False)
         }

@@ -36,21 +36,37 @@ def lambda_handler(event, context):
         if "error" in factura:
             return {
                 'statusCode': 404,
-                'body': json.dumps(factura)
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps(factura, indent=2, ensure_ascii=False)
             }
         
         return {
             'statusCode': 200,
-            'body': json.dumps(factura)
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps(factura, indent=2, ensure_ascii=False, default=str)
         }
 
     except KeyError as e:
         return {
             'statusCode': 400,
-            'body': json.dumps({'error': f'Campo requerido faltante: {str(e)}'})
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': f'Campo requerido faltante: {str(e)}'}, indent=2, ensure_ascii=False)
         }
     except Exception as e:
         return {
             'statusCode': 500,
-            'body': json.dumps({'error': f"Error al obtener la factura: {str(e)}"})
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({'error': f"Error al obtener la factura: {str(e)}"}, indent=2, ensure_ascii=False)
         }
