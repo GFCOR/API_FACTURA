@@ -1,0 +1,72 @@
+org: gfc0r
+service: facturas-api
+
+provider:
+  name: aws
+  runtime: python3.13
+  environment:
+    USUARIO_LAMBDA_URL: ${env:USUARIO_LAMBDA_URL}
+    PRODUCTO_LAMBDA_URL: ${env:PRODUCTO_LAMBDA_URL}
+
+functions:
+  crearFactura:
+    handler: CrearFactura.lambda_handler
+    events:
+      - http:
+          path: factura/crear
+          method: post
+          cors: true
+
+  listarFacturas:
+    handler: ListarFacturas.lambda_handler
+    events:
+      - http:
+          path: factura/listar
+          method: post
+          cors: true
+
+  obtenerFactura:
+    handler: ObtenerFacturaPorId.lambda_handler
+    events:
+      - http:
+          path: factura/obtener
+          method: post
+          cors: true
+
+  actualizarFactura:
+    handler: ActualizarFactura.lambda_handler
+    events:
+      - http:
+          path: factura/actualizar
+          method: post
+          cors: true
+
+  eliminarFactura:
+    handler: EliminarFactura.lambda_handler
+    events:
+      - http:
+          path: factura/eliminar
+          method: post
+          cors: true
+
+resources:
+  Resources:
+    TablaFacturas:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: facturas-${self:provider.stage}
+        AttributeDefinitions:
+          - AttributeName: tenant_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: tenant_id
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+
+
+plugins:
+  - serverless-python-requirements
+
+custom:
+  pythonRequirements:
+    dockerizePip: non-linux
