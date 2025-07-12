@@ -180,19 +180,25 @@ def lambda_handler(event, context):
                 try:
                     body = json.loads(cleaned_body)
                 except Exception as e:
-                    logger.error(f"💥 ERROR PARSEANDO BODY: {str(e)}")
-                    return {
-                        'statusCode': 400,
-                        'headers': {
-                            'Content-Type': 'application/json',
-                            'Access-Control-Allow-Origin': '*'
-                        },
-                        'body': json.dumps({
-                            'error': 'PROCESO 1 FALLÓ: El body del request no es JSON válido',
-                            'detalle': f'Error de parseo: {str(e)}',
-                            'raw_body': cleaned_body
-                        }, indent=2, ensure_ascii=False)
-                    }
+                    logger.warning(f"⚠️ json.loads falló: {str(e)}. Intentando ast.literal_eval...")
+                    import ast
+                    try:
+                        body = ast.literal_eval(cleaned_body)
+                        logger.info(f"✅ BODY parseado exitosamente con ast.literal_eval")
+                    except Exception as e2:
+                        logger.error(f"💥 ERROR PARSEANDO BODY: {str(e2)}")
+                        return {
+                            'statusCode': 400,
+                            'headers': {
+                                'Content-Type': 'application/json',
+                                'Access-Control-Allow-Origin': '*'
+                            },
+                            'body': json.dumps({
+                                'error': 'PROCESO 1 FALLÓ: El body del request no es JSON válido',
+                                'detalle': f'Error de parseo: json.loads: {str(e)} | ast.literal_eval: {str(e2)}',
+                                'raw_body': cleaned_body
+                            }, indent=2, ensure_ascii=False)
+                        }
         else:
             body = event
         logger.info(f"✅ Body recibido y procesado como dict")
