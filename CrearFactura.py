@@ -2,7 +2,7 @@ import json
 import boto3
 from datetime import datetime
 import uuid
-import requests
+import urllib3
 import os
 import logging
 from decimal import Decimal
@@ -14,6 +14,9 @@ logger.setLevel(logging.INFO)
 # Cliente de DynamoDB
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table('Facturas')
+
+# Cliente HTTP para llamadas externas (urllib3 viene con boto3)
+http = urllib3.PoolManager()
 
 # URLs de las lambdas (configurar como variables de entorno)
 USUARIO_LAMBDA_URL = os.environ.get('USUARIO_LAMBDA_URL', 'https://7q0ekap8l8.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener')
@@ -32,28 +35,31 @@ def obtener_datos_usuario(usuario_id, tenant_id):
         logger.info(f"📤 ENVIANDO: Request a servicio usuarios - URL: {USUARIO_LAMBDA_URL}")
         logger.info(f"📤 PAYLOAD: {json.dumps(data)}")
         
-        response = requests.post(
+        encoded_data = json.dumps(data).encode('utf-8')
+        
+        response = http.request(
+            'POST',
             USUARIO_LAMBDA_URL,
-            json=data,
+            body=encoded_data,
             headers={'Content-Type': 'application/json'},
-            timeout=30
+            timeout=30.0
         )
         
-        logger.info(f"📥 RESPUESTA: HTTP Status {response.status_code} del servicio usuarios")
+        logger.info(f"📥 RESPUESTA: HTTP Status {response.status} del servicio usuarios")
         
-        if response.status_code == 200:
-            user_data = response.json()
+        if response.status == 200:
+            user_data = json.loads(response.data.decode('utf-8'))
             logger.info(f"✅ ÉXITO: Usuario obtenido correctamente - Nombre: {user_data.get('nombres', 'N/A')} {user_data.get('apellidos', 'N/A')}")
             return user_data
         else:
-            logger.warning(f"⚠️ ERROR HTTP: Servicio usuarios respondió con status {response.status_code}")
-            logger.warning(f"⚠️ RESPUESTA COMPLETA: {response.text}")
+            logger.warning(f"⚠️ ERROR HTTP: Servicio usuarios respondió con status {response.status}")
+            logger.warning(f"⚠️ RESPUESTA COMPLETA: {response.data.decode('utf-8')}")
             return None
             
-    except requests.exceptions.Timeout:
+    except urllib3.exceptions.TimeoutError:
         logger.error(f"⏰ TIMEOUT: El servicio de usuarios no respondió en 30 segundos")
         return None
-    except requests.exceptions.ConnectionError:
+    except urllib3.exceptions.MaxRetryError:
         logger.error(f"🔌 CONEXIÓN: No se pudo conectar al servicio de usuarios")
         return None
     except Exception as e:
@@ -73,28 +79,31 @@ def obtener_datos_producto(producto_id, tenant_id):
         logger.info(f"📤 ENVIANDO: Request a servicio productos - URL: {PRODUCTO_LAMBDA_URL}")
         logger.info(f"📤 PAYLOAD: {json.dumps(data)}")
         
-        response = requests.post(
+        encoded_data = json.dumps(data).encode('utf-8')
+        
+        response = http.request(
+            'POST',
             PRODUCTO_LAMBDA_URL,
-            json=data,
+            body=encoded_data,
             headers={'Content-Type': 'application/json'},
-            timeout=30
+            timeout=30.0
         )
         
-        logger.info(f"📥 RESPUESTA: HTTP Status {response.status_code} del servicio productos")
+        logger.info(f"📥 RESPUESTA: HTTP Status {response.status} del servicio productos")
         
-        if response.status_code == 200:
-            product_data = response.json()
+        if response.status == 200:
+            product_data = json.loads(response.data.decode('utf-8'))
             logger.info(f"✅ ÉXITO: Producto obtenido correctamente - Nombre: {product_data.get('nombre', 'N/A')}, Precio: {product_data.get('precio', 'N/A')}")
             return product_data
         else:
-            logger.warning(f"⚠️ ERROR HTTP: Servicio productos respondió con status {response.status_code}")
-            logger.warning(f"⚠️ RESPUESTA COMPLETA: {response.text}")
+            logger.warning(f"⚠️ ERROR HTTP: Servicio productos respondió con status {response.status}")
+            logger.warning(f"⚠️ RESPUESTA COMPLETA: {response.data.decode('utf-8')}")
             return None
             
-    except requests.exceptions.Timeout:
+    except urllib3.exceptions.TimeoutError:
         logger.error(f"⏰ TIMEOUT: El servicio de productos no respondió en 30 segundos")
         return None
-    except requests.exceptions.ConnectionError:
+    except urllib3.exceptions.MaxRetryError:
         logger.error(f"🔌 CONEXIÓN: No se pudo conectar al servicio de productos")
         return None
     except Exception as e:
