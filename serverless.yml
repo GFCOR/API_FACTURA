@@ -6,7 +6,7 @@ provider:
   runtime: python3.13
   stage: ${opt:stage, 'dev'}
   iam:
-    role: arn:aws:iam::000085020055:role/LabRol
+    role: arn:aws:iam::000085020055:role/LabRole
   environment:
     USUARIO_LAMBDA_URL: ${env:USUARIO_LAMBDA_URL}
     PRODUCTO_LAMBDA_URL: ${env:PRODUCTO_LAMBDA_URL}
