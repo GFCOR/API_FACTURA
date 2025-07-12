@@ -369,9 +369,8 @@ def lambda_handler(event, context):
                     'Access-Control-Allow-Origin': '*'
                 },
                 'body': json.dumps({
-                    'error': 'PROCESO 7 FALLÓ: Error al guardar en base de datos',
+                    'error': 'Error al crear la factura',
                     'detalle': f'No se pudo guardar la factura en DynamoDB: {str(e)}',
-                    'proceso_fallido': 'Guardado en base de datos',
                     'factura_data': {
                         'total': total,
                         'productos_count': len(productos_obj),
@@ -379,19 +378,19 @@ def lambda_handler(event, context):
                     }
                 }, indent=2, ensure_ascii=False)
             }
-        
         # PROCESO 8: Respuesta exitosa
         logger.info(f"🎉 PROCESO 8: Generando respuesta exitosa")
-        
         logger.info(f"🏁 FINAL: Factura creada completamente - ID: {factura_creada['factura_id']}, Total: ${total}")
-        
         return {
-            'statusCode': 200,
+            'statusCode': 201,
             'headers': {
                 'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*'
             },
-            'body': json.dumps(factura_creada, default=decimal_default, indent=2, ensure_ascii=False)
+            'body': json.dumps({
+                'mensaje': 'Factura creada exitosamente',
+                'factura': factura_creada
+            }, default=decimal_default, indent=2, ensure_ascii=False)
         }
 
     except Exception as e:
