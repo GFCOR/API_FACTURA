@@ -171,8 +171,25 @@ def lambda_handler(event, context):
         # Solo parsear si el body es string, si no usarlo directo
         if 'body' in event and event['body'] is not None:
             body = event['body']
+            logger.info(f"📋 RAW BODY RECIBIDO: {body}")
+            logger.info(f"📋 Tipo de body: {type(body)}")
             if isinstance(body, str):
-                body = json.loads(body)
+                try:
+                    body = json.loads(body)
+                except Exception as e:
+                    logger.error(f"💥 ERROR PARSEANDO BODY: {str(e)}")
+                    return {
+                        'statusCode': 400,
+                        'headers': {
+                            'Content-Type': 'application/json',
+                            'Access-Control-Allow-Origin': '*'
+                        },
+                        'body': json.dumps({
+                            'error': 'PROCESO 1 FALLÓ: El body del request no es JSON válido',
+                            'detalle': f'Error de parseo: {str(e)}',
+                            'raw_body': body
+                        }, indent=2, ensure_ascii=False)
+                    }
         else:
             body = event
         logger.info(f"✅ Body recibido y procesado como dict")
