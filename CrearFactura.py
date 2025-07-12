@@ -5,6 +5,7 @@ import uuid
 import urllib3
 import os
 import logging
+from decimal import Decimal
 
 # Configurar logging para CloudWatch
 logger = logging.getLogger()
@@ -18,8 +19,8 @@ table = dynamodb.Table('Facturas')
 http = urllib3.PoolManager()
 
 # URLs de las lambdas (configurar como variables de entorno)
-USUARIO_LAMBDA_URL = os.environ.get('USUARIO_LAMBDA_URL', 'https://your-api-gateway-url/usuario')
-PRODUCTO_LAMBDA_URL = os.environ.get('PRODUCTO_LAMBDA_URL', 'https://your-api-gateway-url/producto')
+USUARIO_LAMBDA_URL = os.environ.get('USUARIO_LAMBDA_URL', 'https://tu-api-gateway-id.execute-api.us-east-1.amazonaws.com/dev/usuario')
+PRODUCTO_LAMBDA_URL = os.environ.get('PRODUCTO_LAMBDA_URL', 'https://tu-api-gateway-id.execute-api.us-east-1.amazonaws.com/dev/producto')
 
 def obtener_datos_usuario(usuario_id, tenant_id):
     """Obtiene datos del usuario desde otra función Lambda"""
@@ -86,12 +87,13 @@ def crear_factura(factura_data, tenant_id):
     try:
         factura_id = str(uuid.uuid4())
         
+        # Convertir floats a Decimal para DynamoDB
         item = {
             'tenant_id': tenant_id,
             'factura_id': factura_id,
             'usuario_id': factura_data['usuario_id'],
-            'productos': factura_data['productos'],
-            'total': factura_data['total'],
+            'productos': convert_floats_to_decimals(factura_data['productos']),
+            'total': Decimal(str(factura_data['total'])),
             'usuario_info': factura_data['usuario_info'],
             'fecha': factura_data['fecha'],
             'fecha_creacion': datetime.utcnow().isoformat(),
@@ -103,13 +105,73 @@ def crear_factura(factura_data, tenant_id):
     except Exception as e:
         raise Exception(f"Error al crear factura: {str(e)}")
 
+def convert_floats_to_decimals(obj):
+    """Convierte recursivamente floats a Decimals para DynamoDB"""
+    if isinstance(obj, float):
+        return Decimal(str(obj))
+    elif isinstance(obj, dict):
+        return {k: convert_floats_to_decimals(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_floats_to_decimals(item) for item in obj]
+    else:
+        return obj
+
+def decimal_default(obj):
+    """Función para serializar Decimals a JSON"""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
 def lambda_handler(event, context):
     try:
-        # Obtener datos del evento
-        body = json.loads(event['body'])
-        tenant_id = body['tenant_id']  # Recibir tenant_id del cliente
+        # DEBUGGING: Log completo del evento
+        logger.info(f"DEBUG: Evento completo recibido: {json.dumps(event)}")
+        
+        # Manejar tanto invocación directa como a través de API Gateway
+        if 'body' in event and event['body'] is not None:
+            # Caso API Gateway (con proxy integration)
+            try:
+                body = json.loads(event['body'])
+                logger.info(f"DEBUG: Invocación vía API Gateway - Body parseado: {json.dumps(body)}")
+            except json.JSONDecodeError as e:
+                logger.error(f"ERROR: No se pudo parsear el body como JSON: {str(e)}")
+                return {
+                    'statusCode': 400,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({
+                        'error': 'Body no es JSON válido',
+                        'raw_body': event['body']
+                    })
+                }
+        else:
+            # Caso invocación directa (sin API Gateway)
+            body = event
+            logger.info(f"DEBUG: Invocación directa - Usando evento como body: {json.dumps(body)}")
+
+        # Verificar campos requeridos
+        campos_requeridos = ['tenant_id', 'usuario_id', 'productos']
+        for campo in campos_requeridos:
+            if campo not in body:
+                logger.error(f"ERROR: Campo requerido faltante: {campo}")
+                return {
+                    'statusCode': 400,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({
+                        'error': f'Campo requerido faltante: {campo}',
+                        'body_keys': list(body.keys())
+                    })
+                }
+
+        # Continuar con el procesamiento normal
+        tenant_id = body['tenant_id']
         usuario_id = body['usuario_id']
-        productos = body['productos']  # Lista de productos con cantidad y ID
+        productos = body['productos']
         total = 0.0
         productos_obj = []
         productos_fallidos = []
@@ -135,9 +197,9 @@ def lambda_handler(event, context):
                 productos_fallidos.append(producto['id'])
                 producto_obj_fallback = {
                     'id_prod': producto['id'],
-                    'precio_unitario': 0.0,
-                    'cantidad': producto['cantidad'],
-                    'subtotal': 0.0,
+                    'precio_unitario': Decimal('0.0'),
+                    'cantidad': int(producto['cantidad']),
+                    'subtotal': Decimal('0.0'),
                     'nombre': 'Producto no disponible',
                     'disponible': False
                 }
@@ -145,12 +207,15 @@ def lambda_handler(event, context):
                 logger.info(f"INFO: Usando datos fallback para producto {producto['id']}")
             else:
                 # Producto obtenido correctamente
-                subtotal = float(producto_info.get('precio', 0)) * int(producto['cantidad'])
-                total += subtotal
+                precio_unitario = Decimal(str(producto_info.get('precio', 0)))
+                cantidad = int(producto['cantidad'])
+                subtotal = precio_unitario * cantidad
+                total += float(subtotal)  # Sumar como float para el cálculo
+                
                 producto_obj = {
                     'id_prod': producto_info.get('id', producto['id']),
-                    'precio_unitario': float(producto_info.get('precio', 0)),
-                    'cantidad': int(producto['cantidad']),
+                    'precio_unitario': precio_unitario,
+                    'cantidad': cantidad,
                     'subtotal': subtotal,
                     'nombre': producto_info.get('nombre', 'Producto'),
                     'disponible': True
@@ -179,12 +244,20 @@ def lambda_handler(event, context):
         
         return {
             'statusCode': 200,
-            'body': json.dumps(factura_creada, default=str)  # default=str para manejar datetime
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps(factura_creada, default=decimal_default)
         }
 
     except Exception as e:
         logger.error(f"ERROR: Fallo crítico al crear factura: {str(e)}")
         return {
             'statusCode': 500,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
             'body': json.dumps({'error': f"Error inesperado: {str(e)}"})
         }
