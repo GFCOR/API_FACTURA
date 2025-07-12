@@ -174,8 +174,11 @@ def lambda_handler(event, context):
             logger.info(f"📋 RAW BODY RECIBIDO: {body}")
             logger.info(f"📋 Tipo de body: {type(body)}")
             if isinstance(body, str):
+                # Limpiar caracteres de control y saltos de línea
+                cleaned_body = body.strip().replace('\r\n', '\n').replace('\r', '\n')
+                logger.info(f"📋 BODY LIMPIO: {cleaned_body}")
                 try:
-                    body = json.loads(body)
+                    body = json.loads(cleaned_body)
                 except Exception as e:
                     logger.error(f"💥 ERROR PARSEANDO BODY: {str(e)}")
                     return {
@@ -187,7 +190,7 @@ def lambda_handler(event, context):
                         'body': json.dumps({
                             'error': 'PROCESO 1 FALLÓ: El body del request no es JSON válido',
                             'detalle': f'Error de parseo: {str(e)}',
-                            'raw_body': body
+                            'raw_body': cleaned_body
                         }, indent=2, ensure_ascii=False)
                     }
         else:
