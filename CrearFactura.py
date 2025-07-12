@@ -171,31 +171,41 @@ def lambda_handler(event, context):
         
         # Manejar tanto invocación directa como a través de API Gateway
         if 'body' in event and event['body'] is not None:
-            # Caso API Gateway (con proxy integration)
-            try:
-                # Limpiar el body de caracteres problemáticos y espacios extra
-                raw_body = event['body']
-                logger.info(f"📋 RAW BODY LENGTH: {len(raw_body)} caracteres")
-                logger.info(f"📋 RAW BODY PREVIEW: {raw_body[:200]}...")
-                
-                # Limpiar caracteres de control y normalizar
-                cleaned_body = raw_body.strip().replace('\r\n', '\n').replace('\r', '\n')
-                logger.info(f"📋 CLEANED BODY LENGTH: {len(cleaned_body)} caracteres")
-                
-                body = json.loads(cleaned_body)
-                logger.info(f"✅ ÉXITO 1: Body parseado correctamente desde API Gateway")
-                logger.info(f"📊 DATOS: {json.dumps(body)}")
-            except json.JSONDecodeError as e:
-                logger.error(f"💥 ERROR 1: No se pudo parsear el body como JSON - {str(e)}")
-                logger.error(f"💥 ERROR POSITION: Línea {e.lineno}, Columna {e.colno}, Carácter {e.pos}")
-                
-                # Mostrar el contexto alrededor del error
+            # Caso API Gateway - verificar si ya es un dict o necesita parsing
+            if isinstance(event['body'], dict):
+                # Ya es un objeto, usar directamente
+                body = event['body']
+                logger.info(f"✅ ÉXITO 1: Body ya es un objeto JSON")
+            elif isinstance(event['body'], str):
+                # Es un string, necesita parsing
                 try:
-                    error_context = event['body'][max(0, e.pos-50):e.pos+50]
-                    logger.error(f"💥 ERROR CONTEXT: ...{error_context}...")
-                except:
-                    pass
-                
+                    # Intentar parsing directo primero
+                    body = json.loads(event['body'])
+                    logger.info(f"✅ ÉXITO 1: Body parseado exitosamente desde string")
+                except json.JSONDecodeError:
+                    # Si falla, limpiar y reintentar
+                    try:
+                        cleaned_body = event['body'].strip().replace('\r\n', '\n').replace('\r', '\n')
+                        body = json.loads(cleaned_body)
+                        logger.info(f"✅ ÉXITO 1: Body parseado después de limpieza")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"💥 ERROR 1: No se pudo parsear el body como JSON - {str(e)}")
+                        return {
+                            'statusCode': 400,
+                            'headers': {
+                                'Content-Type': 'application/json',
+                                'Access-Control-Allow-Origin': '*'
+                            },
+                            'body': json.dumps({
+                                'error': 'PROCESO 1 FALLÓ: El body del request no es JSON válido',
+                                'detalle': f'Error de parseo: {str(e)}',
+                                'proceso_fallido': 'Validación de formato JSON',
+                                'raw_body_type': str(type(event['body'])),
+                                'raw_body_preview': str(event['body'])[:300]
+                            }, indent=2, ensure_ascii=False)
+                        }
+            else:
+                logger.error(f"💥 ERROR 1: Tipo de body no soportado: {type(event['body'])}")
                 return {
                     'statusCode': 400,
                     'headers': {
@@ -203,36 +213,17 @@ def lambda_handler(event, context):
                         'Access-Control-Allow-Origin': '*'
                     },
                     'body': json.dumps({
-                        'error': 'PROCESO 1 FALLÓ: El body del request no es JSON válido',
-                        'detalle': f'Error de parseo: {str(e)}',
-                        'proceso_fallido': 'Validación de formato JSON',
-                        'error_posicion': {
-                            'linea': e.lineno,
-                            'columna': e.colno,
-                            'caracter': e.pos
-                        },
-                        'raw_body_length': len(event['body']),
-                        'raw_body_preview': event['body'][:300] if len(event['body']) > 300 else event['body']
-                    }, indent=2, ensure_ascii=False)
-                }
-            except Exception as e:
-                logger.error(f"💥 ERROR 1: Error inesperado al procesar body - {str(e)}")
-                return {
-                    'statusCode': 400,
-                    'headers': {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*'
-                    },
-                    'body': json.dumps({
-                        'error': 'PROCESO 1 FALLÓ: Error inesperado al procesar el body',
-                        'detalle': f'Error: {str(e)}',
-                        'proceso_fallido': 'Procesamiento del body'
+                        'error': 'PROCESO 1 FALLÓ: Tipo de body no soportado',
+                        'detalle': f'Se esperaba dict o str, pero se recibió {type(event["body"])}',
+                        'proceso_fallido': 'Validación de tipo de body'
                     }, indent=2, ensure_ascii=False)
                 }
         else:
             # Caso invocación directa (sin API Gateway)
             body = event
             logger.info(f"✅ ÉXITO 1: Usando evento directo como body")
+            
+        logger.info(f"📊 DATOS FINALES: {json.dumps(body, default=str)}")
 
         # PROCESO 2: Validar campos requeridos
         logger.info(f"🔍 PROCESO 2: Validando campos requeridos")
