@@ -5,19 +5,11 @@ provider:
   name: aws
   runtime: python3.13
   stage: ${opt:stage, 'dev'}
+  iam:
+    role: arn:aws:iam::000085020055:role/LabRol
   environment:
     USUARIO_LAMBDA_URL: ${env:USUARIO_LAMBDA_URL}
     PRODUCTO_LAMBDA_URL: ${env:PRODUCTO_LAMBDA_URL}
-  iamRoleStatements:
-    - Effect: Allow
-      Action:
-        - dynamodb:Query
-        - dynamodb:Scan
-        - dynamodb:GetItem
-        - dynamodb:PutItem
-        - dynamodb:UpdateItem
-        - dynamodb:DeleteItem
-      Resource: "arn:aws:dynamodb:${self:provider.region}:*:table/${self:service}-${self:provider.stage}"
 
 functions:
   crearFactura:
