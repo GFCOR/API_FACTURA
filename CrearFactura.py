@@ -176,6 +176,9 @@ def lambda_handler(event, context):
             if isinstance(body, str):
                 # Limpiar caracteres de control y saltos de línea
                 cleaned_body = body.strip().replace('\r\n', '\n').replace('\r', '\n')
+                # Eliminar todos los caracteres no imprimibles (incluyendo U+00A0)
+                import re
+                cleaned_body = re.sub(r'[\x00-\x1F\x7F\u00A0]', '', cleaned_body)
                 logger.info(f"📋 BODY LIMPIO: {cleaned_body}")
                 try:
                     body = json.loads(cleaned_body)
