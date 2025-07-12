@@ -69,11 +69,3 @@ resources:
           - AttributeName: factura_id
             KeyType: RANGE
         BillingMode: PAY_PER_REQUEST
-
-
-plugins:
-  - serverless-python-requirements
-
-custom:
-  pythonRequirements:
-    dockerizePip: non-linux

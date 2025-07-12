@@ -2,7 +2,7 @@ import json
 import boto3
 from datetime import datetime
 import uuid
-import urllib3
+import requests
 import os
 import logging
 from decimal import Decimal
@@ -15,9 +15,6 @@ logger.setLevel(logging.INFO)
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table('Facturas')
 
-# Cliente HTTP para llamadas a otras lambdas
-http = urllib3.PoolManager()
-
 # URLs de las lambdas (configurar como variables de entorno)
 USUARIO_LAMBDA_URL = os.environ.get('USUARIO_LAMBDA_URL', 'https://7q0ekap8l8.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener')
 PRODUCTO_LAMBDA_URL = os.environ.get('PRODUCTO_LAMBDA_URL', 'https://3hy80u5ihe.execute-api.us-east-1.amazonaws.com/dev')
@@ -25,26 +22,23 @@ PRODUCTO_LAMBDA_URL = os.environ.get('PRODUCTO_LAMBDA_URL', 'https://3hy80u5ihe.
 def obtener_datos_usuario(usuario_id, tenant_id):
     """Obtiene datos del usuario desde otra función Lambda"""
     try:
-        body = json.dumps({
+        data = {
             'tenant_id': tenant_id,
             'id': usuario_id
-        })
+        }
         
-        response = http.request(
-            'POST',
+        response = requests.post(
             USUARIO_LAMBDA_URL,
-            body=body,
-            headers={
-                'Content-Type': 'application/json'
-            }
+            json=data,
+            headers={'Content-Type': 'application/json'},
+            timeout=30
         )
         
-        if response.status == 200:
-            data = json.loads(response.data.decode('utf-8'))
-            return data
+        if response.status_code == 200:
+            return response.json()
         else:
             # Log de alerta para CloudWatch
-            logger.warning(f"ALERTA: Error al obtener usuario {usuario_id} del tenant {tenant_id}. HTTP Status: {response.status}")
+            logger.warning(f"ALERTA: Error al obtener usuario {usuario_id} del tenant {tenant_id}. HTTP Status: {response.status_code}")
             return None
             
     except Exception as e:
@@ -55,26 +49,23 @@ def obtener_datos_usuario(usuario_id, tenant_id):
 def obtener_datos_producto(producto_id, tenant_id):
     """Obtiene datos del producto desde otra función Lambda"""
     try:
-        body = json.dumps({
+        data = {
             'tenant_id': tenant_id,
             'id_producto': producto_id
-        })
+        }
         
-        response = http.request(
-            'POST',
+        response = requests.post(
             PRODUCTO_LAMBDA_URL,
-            body=body,
-            headers={
-                'Content-Type': 'application/json'
-            }
+            json=data,
+            headers={'Content-Type': 'application/json'},
+            timeout=30
         )
         
-        if response.status == 200:
-            data = json.loads(response.data.decode('utf-8'))
-            return data
+        if response.status_code == 200:
+            return response.json()
         else:
             # Log de alerta para CloudWatch
-            logger.warning(f"ALERTA: Error al obtener producto {producto_id} del tenant {tenant_id}. HTTP Status: {response.status}")
+            logger.warning(f"ALERTA: Error al obtener producto {producto_id} del tenant {tenant_id}. HTTP Status: {response.status_code}")
             return None
             
     except Exception as e:
