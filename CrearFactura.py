@@ -26,7 +26,7 @@ def obtener_datos_usuario(usuario_id, tenant_id):
     """Obtiene datos del usuario desde otra función Lambda"""
     try:
         body = json.dumps({
-            'empresa': tenant_id,
+            'tenant_id': tenant_id,
             'id': usuario_id
         })
         
@@ -56,7 +56,7 @@ def obtener_datos_producto(producto_id, tenant_id):
     """Obtiene datos del producto desde otra función Lambda"""
     try:
         body = json.dumps({
-            'empresa': tenant_id,
+            'tenant_id': tenant_id,
             'id_producto': producto_id
         })
         
