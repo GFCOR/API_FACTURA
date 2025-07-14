@@ -19,8 +19,8 @@ table = dynamodb.Table('Facturas')
 http = urllib3.PoolManager()
 
 # URLs de las lambdas (configurar como variables de entorno)
-USUARIO_LAMBDA_URL = os.environ.get('USUARIO_LAMBDA_URL', 'https://7q0ekap8l8.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener')
-PRODUCTO_LAMBDA_URL = os.environ.get('PRODUCTO_LAMBDA_URL', 'https://3hy80u5ihe.execute-api.us-east-1.amazonaws.com/dev')
+USUARIO_LAMBDA_URL = os.environ.get('USUARIO_LAMBDA_URL', 'https://6mgsre8wyb.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener')
+PRODUCTO_LAMBDA_URL = os.environ.get('PRODUCTO_LAMBDA_URL', 'https://ngjoc04j00.execute-api.us-east-1.amazonaws.com/dev/productos/obtener')
 
 def obtener_datos_usuario(usuario_id, tenant_id):
     """Obtiene datos del usuario desde otra función Lambda"""
@@ -67,30 +67,23 @@ def obtener_datos_usuario(usuario_id, tenant_id):
         return None
 
 def obtener_datos_producto(producto_id, tenant_id):
-    """Obtiene datos del producto desde otra función Lambda"""
+    """Obtiene datos del producto desde otra función Lambda usando GET y query params"""
     logger.info(f"🔍 PROCESO: Iniciando obtención de datos del producto {producto_id} para tenant {tenant_id}")
-    
+
     try:
-        data = {
-            'tenant_id': tenant_id,
-            'id_producto': producto_id
-        }
-        
-        logger.info(f"📤 ENVIANDO: Request a servicio productos - URL: {PRODUCTO_LAMBDA_URL}")
-        logger.info(f"📤 PAYLOAD: {json.dumps(data)}")
-        
-        encoded_data = json.dumps(data).encode('utf-8')
-        
+        # Construir la URL con los parámetros
+        url = f"{PRODUCTO_LAMBDA_URL}/productos/obtener?tenant_id={tenant_id}&id_producto={producto_id}"
+        logger.info(f"📤 ENVIANDO: Request a servicio productos - URL: {url}")
+
         response = http.request(
-            'POST',
-            PRODUCTO_LAMBDA_URL,
-            body=encoded_data,
+            'GET',
+            url,
             headers={'Content-Type': 'application/json'},
             timeout=30.0
         )
-        
+
         logger.info(f"📥 RESPUESTA: HTTP Status {response.status} del servicio productos")
-        
+
         if response.status == 200:
             product_data = json.loads(response.data.decode('utf-8'))
             logger.info(f"✅ ÉXITO: Producto obtenido correctamente - Nombre: {product_data.get('nombre', 'N/A')}, Precio: {product_data.get('precio', 'N/A')}")
@@ -99,7 +92,7 @@ def obtener_datos_producto(producto_id, tenant_id):
             logger.warning(f"⚠️ ERROR HTTP: Servicio productos respondió con status {response.status}")
             logger.warning(f"⚠️ RESPUESTA COMPLETA: {response.data.decode('utf-8')}")
             return None
-            
+
     except urllib3.exceptions.TimeoutError:
         logger.error(f"⏰ TIMEOUT: El servicio de productos no respondió en 30 segundos")
         return None
