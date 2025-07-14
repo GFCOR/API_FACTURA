@@ -13,7 +13,7 @@ logger.setLevel(logging.INFO)
 
 # Cliente de DynamoDB
 dynamodb = boto3.resource('dynamodb')
-table = dynamodb.Table('Facturas')
+table = dynamodb.Table('facturas-api-dev')
 
 # Cliente HTTP para llamadas externas (urllib3 viene con boto3)
 http = urllib3.PoolManager()
