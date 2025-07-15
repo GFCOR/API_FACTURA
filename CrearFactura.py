@@ -53,7 +53,6 @@ class DecimalEncoder(json.JSONEncoder):
         return super(DecimalEncoder, self).default(obj)
 
 # --- Handler Principal de la Lambda ---
-
 def lambda_handler(event, context):
     logger.info(f"Iniciando lambda 'crear_factura_completa'. Request ID: {context.aws_request_id}")
 
@@ -70,26 +69,35 @@ def lambda_handler(event, context):
         # --- 2. Enriquecer y Validar Datos Estrictamente ---
         logger.info("Paso 2: Enriqueciendo y validando datos desde servicios externos.")
         
-        # ## --- NUEVA LÓGICA DE VALIDACIÓN PARA USUARIO --- ##
         usuario_info_respuesta = obtener_datos_externos(USUARIO_LAMBDA_URL, data={'tenant_id': tenant_id, 'id': usuario_id})
 
         if not (usuario_info_respuesta and 'user' in usuario_info_respuesta):
             error_msg = f"Usuario con ID '{usuario_id}' no encontrado para el tenant '{tenant_id}'."
             logger.error(error_msg)
-            return {
-                "statusCode": 404, # Not Found
-                "headers": {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                "body": json.dumps({"error": error_msg})
-            }
+            return {"statusCode": 404, "body": json.dumps({"error": error_msg})}
         
         usuario_info = usuario_info_respuesta['user']
         logger.info(f"Usuario {usuario_id} encontrado: {usuario_info.get('nombres')}")
 
-        # ## --- NUEVA LÓGICA DE VALIDACIÓN PARA PRODUCTOS --- ##
+        # ## --- LA CORRECCIÓN CLAVE ESTÁ AQUÍ --- ##
+        # Verificamos si el campo 'direccion' existe y es un string que contiene un JSON.
+        if 'direccion' in usuario_info and isinstance(usuario_info['direccion'], str):
+            try:
+                # Intentamos convertir el string de la dirección a un objeto dict de Python
+                logger.info(f"Detectado campo 'direccion' como string. Intentando deserializar: {usuario_info['direccion']}")
+                usuario_info['direccion'] = json.loads(usuario_info['direccion'])
+                logger.info("El campo 'direccion' ha sido deserializado a un objeto struct correctamente.")
+            except json.JSONDecodeError:
+                # Si no es un JSON válido, lo ponemos como nulo para mantener la consistencia del esquema.
+                logger.warning("El campo 'direccion' no era un JSON válido. Se establecerá como nulo.")
+                usuario_info['direccion'] = None
+        
+        # ## --- Lógica de validación de productos (sin cambios) --- ##
         total_factura = Decimal('0.0')
         productos_procesados = []
 
         for prod_req in productos_req:
+            # ... (el resto del bucle de productos sigue igual) ...
             prod_id = prod_req.get('id')
             cantidad = prod_req.get('cantidad', 1)
             
@@ -99,11 +107,7 @@ def lambda_handler(event, context):
             if not (producto_info_respuesta and 'product' in producto_info_respuesta):
                 error_msg = f"Producto con ID '{prod_id}' no encontrado para el tenant '{tenant_id}'."
                 logger.error(error_msg)
-                return {
-                    "statusCode": 404, # Not Found
-                    "headers": {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                    "body": json.dumps({"error": error_msg})
-                }
+                return {"statusCode": 404, "body": json.dumps({"error": error_msg})}
 
             producto_real = producto_info_respuesta['product']
             logger.info(f"Producto {prod_id} encontrado: {producto_real.get('nombre')}")
@@ -122,7 +126,6 @@ def lambda_handler(event, context):
             })
 
         # --- 3. Ensamblar el Objeto Final de la Factura ---
-        # (Ahora tenemos la certeza de que todos los datos son válidos)
         logger.info("Paso 3: Ensamblando objeto final de la factura.")
         
         factura_id = str(uuid.uuid4())
@@ -137,7 +140,7 @@ def lambda_handler(event, context):
             'productos': productos_procesados,
             'total': total_factura,
             'estado': 'activa',
-            'productos_fallidos': [] # La lista ahora siempre estará vacía
+            'productos_fallidos': []
         }
         
         factura_dynamodb = convert_floats_to_decimals(factura_final)
