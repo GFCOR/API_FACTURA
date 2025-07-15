@@ -22,13 +22,12 @@ except Exception as e:
     logger.error(f"Error inicializando clientes de AWS: {str(e)}")
     raise e
 
-# 3. Obtener configuración desde Variables de Entorno (¡IMPORTANTE!)
-#    Debes configurar estas variables en tu función Lambda.
+# 3. Obtener configuración desde Variables de Entorno
+#    (Usando os.environ.get es la mejor práctica, pero tu método también funciona)
 DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME', 'facturas-api-dev')
-S3_BUCKET_NAME = "pf-facturas-sergio" # ¡Añade esta variable!
-USUARIO_LAMBDA_URL = "https://30ipk5jpl6.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener"
-PRODUCTO_LAMBDA_URL = "https://1kobbmlfu9.execute-api.us-east-1.amazonaws.com/dev/productos/obtener"
-
+S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'pf-facturas-sergio')
+USUARIO_LAMBDA_URL = os.environ.get('USUARIO_LAMBDA_URL', 'https://30ipk5jpl6.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener')
+PRODUCTO_LAMBDA_URL = os.environ.get('PRODUCTO_LAMBDA_URL', 'https://1kobbmlfu9.execute-api.us-east-1.amazonaws.com/dev/productos/obtener')
 
 # --- Funciones de Ayuda (Llamadas a otros servicios y conversiones) ---
 
@@ -94,9 +93,14 @@ def lambda_handler(event, context):
         logger.info("Paso 2: Enriqueciendo datos desde servicios externos.")
         
         # Obtener datos del usuario
-        usuario_info = obtener_datos_externos(USUARIO_LAMBDA_URL, data={'tenant_id': tenant_id, 'id': usuario_id})
-        if not usuario_info:
+        usuario_info_respuesta = obtener_datos_externos(USUARIO_LAMBDA_URL, data={'tenant_id': tenant_id, 'id': usuario_id})
+        # ** CORRECCIÓN 1: Extraer el objeto 'user' de la respuesta **
+        if usuario_info_respuesta and 'user' in usuario_info_respuesta:
+            usuario_info = usuario_info_respuesta['user']
+            logger.info(f"Usuario {usuario_id} encontrado: {usuario_info.get('nombres')}")
+        else:
             usuario_info = {'id': usuario_id, 'nombre': 'Usuario no disponible', 'error': True}
+            logger.warning(f"No se pudo obtener información para el usuario {usuario_id}.")
 
         # Procesar productos y calcular total
         total_factura = Decimal('0.0')
@@ -107,21 +111,28 @@ def lambda_handler(event, context):
             prod_id = prod_req.get('id')
             cantidad = prod_req.get('cantidad', 1)
             
-            producto_info = obtener_datos_externos(f"{PRODUCTO_LAMBDA_URL}?tenant_id={tenant_id}&id_producto={prod_id}", method='GET')
+            logger.info(f"Obteniendo datos para producto: {prod_id}")
+            producto_info_respuesta = obtener_datos_externos(f"{PRODUCTO_LAMBDA_URL}?tenant_id={tenant_id}&id_producto={prod_id}", method='GET')
             
-            if producto_info:
-                precio_unitario = Decimal(str(producto_info.get('precio', 0)))
+            # ** CORRECCIÓN 2: Extraer el objeto 'product' de la respuesta **
+            if producto_info_respuesta and 'product' in producto_info_respuesta:
+                producto_real = producto_info_respuesta['product']
+                logger.info(f"Producto {prod_id} encontrado: {producto_real.get('nombre')}")
+
+                precio_str = producto_real.get('precio', '0')
+                precio_unitario = Decimal(precio_str)
                 subtotal = precio_unitario * Decimal(cantidad)
                 total_factura += subtotal
                 
                 productos_procesados.append({
                     'id_prod': prod_id,
-                    'nombre': producto_info.get('nombre', 'Producto sin nombre'),
+                    'nombre': producto_real.get('nombre', 'Producto sin nombre'),
                     'precio_unitario': precio_unitario,
                     'cantidad': cantidad,
                     'subtotal': subtotal
                 })
             else:
+                logger.warning(f"No se pudo obtener información para el producto {prod_id}. Respuesta recibida: {producto_info_respuesta}")
                 productos_fallidos.append(prod_id)
 
         # --- 3. Ensamblar el Objeto Final de la Factura ---
@@ -142,7 +153,6 @@ def lambda_handler(event, context):
             'productos_fallidos': productos_fallidos
         }
         
-        # Convertir todos los floats/ints a Decimal para DynamoDB
         factura_dynamodb = convert_floats_to_decimals(factura_final)
         
         # --- 4. Guardar en DynamoDB (Fuente de la verdad) ---
@@ -171,7 +181,7 @@ def lambda_handler(event, context):
             'body': json.dumps({
                 'mensaje': 'Factura creada, enriquecida y archivada exitosamente',
                 'factura': factura_final
-            }, cls=DecimalEncoder)
+            }, cls=DecimalEncoder, indent=2)
         }
 
     except json.JSONDecodeError as e:
