@@ -15,6 +15,8 @@ try:
     dynamodb_resource = boto3.resource('dynamodb')
     s3_client = boto3.client('s3')
     http = urllib3.PoolManager()
+    # ## --- NUEVA LÍNEA: Cliente de AWS Glue --- ##
+    glue_client = boto3.client('glue') 
 except Exception as e:
     logger.error(f"Error inicializando clientes de AWS: {str(e)}")
     raise e
@@ -51,6 +53,55 @@ class DecimalEncoder(json.JSONEncoder):
         if isinstance(obj, Decimal):
             return int(obj) if obj % 1 == 0 else float(obj)
         return super(DecimalEncoder, self).default(obj)
+
+# ## --- NUEVA FUNCIÓN: Añadir Partición a Glue Data Catalog --- ##
+def add_partition_to_glue(tenant_id, fecha, bucket_name, table_name="pf_facturas_sergio", database_name="facturas_db"):
+    """
+    Añade una nueva partición al Glue Data Catalog si aún no existe.
+    Esto permite que Athena descubra nuevas "carpetas" de datos automáticamente.
+    """
+    try:
+        # Definir la ubicación de la partición en S3
+        # La ruta debe coincidir exactamente con cómo se guardan tus archivos.
+        # En tu caso, la estructura en S3 es {tenant_id}/facturas/{fecha}/
+        partition_location = f"s3://{bucket_name}/{tenant_id}/facturas/{fecha}/"
+
+        # Definir los valores de las particiones en el orden correcto
+        # Tus particiones en Glue son partition_0 y partition_2.
+        # partition_0 es tenant_id y partition_2 es fecha.
+        partition_values = [tenant_id, fecha] 
+
+        # Intentar obtener la partición para verificar si ya existe
+        try:
+            glue_client.get_partition(
+                DatabaseName=database_name,
+                TableName=table_name,
+                PartitionValues=partition_values # Se usa el orden de la definición del crawler
+            )
+            logger.info(f"Partición {partition_values} ya existe en Glue para {table_name}. No se hace nada.")
+        except glue_client.exceptions.EntityNotFoundException:
+            # Si la partición no existe, la creamos
+            glue_client.create_partition(
+                DatabaseName=database_name,
+                TableName=table_name,
+                PartitionInput={
+                    'Values': partition_values,
+                    'StorageDescriptor': {
+                        'Location': partition_location,
+                        'SerdeInfo': {
+                            'SerializationLibrary': 'org.openx.data.jsonserde.JsonSerDe',
+                            'Parameters': {'ignore.malformed.json': 'true'}
+                        },
+                        'InputFormat': 'org.apache.hadoop.mapred.TextInputFormat',
+                        'OutputFormat': 'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat',
+                        # No es necesario definir 'Columns' aquí, Glue usará el esquema de la tabla principal
+                    }
+                }
+            )
+            logger.info(f"Partición {partition_values} creada exitosamente en Glue para {table_name}.")
+    except Exception as e:
+        logger.error(f"Error al añadir/verificar partición en Glue para {tenant_id}/{fecha}: {str(e)}", exc_info=True)
+
 
 # --- Handler Principal de la Lambda ---
 def lambda_handler(event, context):
@@ -139,24 +190,21 @@ def lambda_handler(event, context):
         
         factura_dynamodb = convert_floats_to_decimals(factura_final)
         
-        # --- Pasos 4, 5 y 6 (sin cambios) ---
+        # --- 4. Guardar en DynamoDB ---
         logger.info(f"Paso 4: Guardando factura {factura_id} en DynamoDB.")
         table = dynamodb_resource.Table(DYNAMODB_TABLE_NAME)
         table.put_item(Item=factura_dynamodb)
         logger.info("Guardado en DynamoDB exitoso.")
 
-        # ## --- ¡LA CORRECCIÓN CLAVE ESTÁ AQUÍ! --- ##
+        # --- 5. Archivando en S3 ---
         logger.info(f"Paso 5: Archivando factura {factura_id} en S3.")
         s3_key = f"{tenant_id}/facturas/{factura_final['fecha']}/{factura_id}.json"
-        
-        s3_client.put_object(
-            Bucket=S3_BUCKET_NAME,
-            Key=s3_key,
-            # Eliminamos indent=2 para que el JSON esté en una sola línea
-            Body=json.dumps(factura_final, cls=DecimalEncoder, ensure_ascii=False),
-            ContentType="application/json"
-        )
+        s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=json.dumps(factura_final, cls=DecimalEncoder, ensure_ascii=False), ContentType="application/json")
         logger.info(f"Archivado en S3 exitoso en la ruta: s3://{S3_BUCKET_NAME}/{s3_key}")
+
+        # ## --- NUEVA LÍNEA CLAVE: Añadir partición a Glue --- ##
+        # Asegúrate de que el S3_BUCKET_NAME sea el mismo que el bucket del Data Lake
+        add_partition_to_glue(tenant_id, factura_final['fecha'], S3_BUCKET_NAME) 
 
         logger.info("Proceso completado.")
         return {
