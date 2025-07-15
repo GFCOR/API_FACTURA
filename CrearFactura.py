@@ -79,25 +79,19 @@ def lambda_handler(event, context):
         usuario_info = usuario_info_respuesta['user']
         logger.info(f"Usuario {usuario_id} encontrado: {usuario_info.get('nombres')}")
 
-        # ## --- LA CORRECCIÓN CLAVE ESTÁ AQUÍ --- ##
-        # Verificamos si el campo 'direccion' existe y es un string que contiene un JSON.
         if 'direccion' in usuario_info and isinstance(usuario_info['direccion'], str):
             try:
-                # Intentamos convertir el string de la dirección a un objeto dict de Python
                 logger.info(f"Detectado campo 'direccion' como string. Intentando deserializar: {usuario_info['direccion']}")
                 usuario_info['direccion'] = json.loads(usuario_info['direccion'])
                 logger.info("El campo 'direccion' ha sido deserializado a un objeto struct correctamente.")
             except json.JSONDecodeError:
-                # Si no es un JSON válido, lo ponemos como nulo para mantener la consistencia del esquema.
                 logger.warning("El campo 'direccion' no era un JSON válido. Se establecerá como nulo.")
                 usuario_info['direccion'] = None
         
-        # ## --- Lógica de validación de productos (sin cambios) --- ##
         total_factura = Decimal('0.0')
         productos_procesados = []
 
         for prod_req in productos_req:
-            # ... (el resto del bucle de productos sigue igual) ...
             prod_id = prod_req.get('id')
             cantidad = prod_req.get('cantidad', 1)
             
@@ -151,9 +145,17 @@ def lambda_handler(event, context):
         table.put_item(Item=factura_dynamodb)
         logger.info("Guardado en DynamoDB exitoso.")
 
+        # ## --- ¡LA CORRECCIÓN CLAVE ESTÁ AQUÍ! --- ##
         logger.info(f"Paso 5: Archivando factura {factura_id} en S3.")
         s3_key = f"{tenant_id}/facturas/{factura_final['fecha']}/{factura_id}.json"
-        s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=json.dumps(factura_final, cls=DecimalEncoder, indent=2, ensure_ascii=False), ContentType="application/json")
+        
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key,
+            # Eliminamos indent=2 para que el JSON esté en una sola línea
+            Body=json.dumps(factura_final, cls=DecimalEncoder, ensure_ascii=False),
+            ContentType="application/json"
+        )
         logger.info(f"Archivado en S3 exitoso en la ruta: s3://{S3_BUCKET_NAME}/{s3_key}")
 
         logger.info("Proceso completado.")
