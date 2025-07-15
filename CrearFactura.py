@@ -15,8 +15,9 @@ try:
     dynamodb_resource = boto3.resource('dynamodb')
     s3_client = boto3.client('s3')
     http = urllib3.PoolManager()
-    # ## --- NUEVA LÍNEA: Cliente de AWS Glue --- ##
     glue_client = boto3.client('glue') 
+    # ## --- NUEVA LÍNEA: Cliente de AWS Lambda para invocación --- ##
+    lambda_client = boto3.client('lambda') 
 except Exception as e:
     logger.error(f"Error inicializando clientes de AWS: {str(e)}")
     raise e
@@ -25,6 +26,8 @@ DYNAMODB_TABLE_NAME = 'facturas-api-dev'
 S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'pf-facturas-sergio')
 USUARIO_LAMBDA_URL = 'https://30ipk5jpl6.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener'
 PRODUCTO_LAMBDA_URL = 'https://1kobbmlfu9.execute-api.us-east-1.amazonaws.com/dev/productos/obtener'
+# ## --- NUEVA VARIABLE: Nombre de la Lambda a invocar --- ##
+ATHENA_REPAIR_LAMBDA_NAME = os.environ.get('ATHENA_REPAIR_LAMBDA_NAME', 'AthenaRepairTableFacturas')
 
 # --- Funciones de Ayuda (sin cambios) ---
 def obtener_datos_externos(url, method='POST', data=None):
@@ -54,49 +57,20 @@ class DecimalEncoder(json.JSONEncoder):
             return int(obj) if obj % 1 == 0 else float(obj)
         return super(DecimalEncoder, self).default(obj)
 
-# ## --- NUEVA FUNCIÓN: Añadir Partición a Glue Data Catalog --- ##
 def add_partition_to_glue(tenant_id, fecha, bucket_name, table_name="pf_facturas_sergio", database_name="facturas_db"):
-    """
-    Añade una nueva partición al Glue Data Catalog si aún no existe.
-    Esto permite que Athena descubra nuevas "carpetas" de datos automáticamente.
-    """
     try:
-        # Definir la ubicación de la partición en S3
-        # La ruta debe coincidir exactamente con cómo se guardan tus archivos.
-        # En tu caso, la estructura en S3 es {tenant_id}/facturas/{fecha}/
         partition_location = f"s3://{bucket_name}/{tenant_id}/facturas/{fecha}/"
-
-        # Definir los valores de las particiones en el orden correcto
-        # Tus particiones en Glue son partition_0 y partition_2.
-        # partition_0 es tenant_id y partition_2 es fecha.
         partition_values = [tenant_id, fecha] 
-
-        # Intentar obtener la partición para verificar si ya existe
         try:
             glue_client.get_partition(
-                DatabaseName=database_name,
-                TableName=table_name,
-                PartitionValues=partition_values # Se usa el orden de la definición del crawler
+                DatabaseName=database_name, TableName=table_name, PartitionValues=partition_values
             )
             logger.info(f"Partición {partition_values} ya existe en Glue para {table_name}. No se hace nada.")
         except glue_client.exceptions.EntityNotFoundException:
-            # Si la partición no existe, la creamos
             glue_client.create_partition(
                 DatabaseName=database_name,
                 TableName=table_name,
-                PartitionInput={
-                    'Values': partition_values,
-                    'StorageDescriptor': {
-                        'Location': partition_location,
-                        'SerdeInfo': {
-                            'SerializationLibrary': 'org.openx.data.jsonserde.JsonSerDe',
-                            'Parameters': {'ignore.malformed.json': 'true'}
-                        },
-                        'InputFormat': 'org.apache.hadoop.mapred.TextInputFormat',
-                        'OutputFormat': 'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat',
-                        # No es necesario definir 'Columns' aquí, Glue usará el esquema de la tabla principal
-                    }
-                }
+                PartitionInput={'Values': partition_values, 'StorageDescriptor': {'Location': partition_location, 'SerdeInfo': {'SerializationLibrary': 'org.openx.data.jsonserde.JsonSerDe', 'Parameters': {'ignore.malformed.json': 'true'}}, 'InputFormat': 'org.apache.hadoop.mapred.TextInputFormat', 'OutputFormat': 'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat'}}
             )
             logger.info(f"Partición {partition_values} creada exitosamente en Glue para {table_name}.")
     except Exception as e:
@@ -202,9 +176,23 @@ def lambda_handler(event, context):
         s3_client.put_object(Bucket=S3_BUCKET_NAME, Key=s3_key, Body=json.dumps(factura_final, cls=DecimalEncoder, ensure_ascii=False), ContentType="application/json")
         logger.info(f"Archivado en S3 exitoso en la ruta: s3://{S3_BUCKET_NAME}/{s3_key}")
 
-        # ## --- NUEVA LÍNEA CLAVE: Añadir partición a Glue --- ##
-        # Asegúrate de que el S3_BUCKET_NAME sea el mismo que el bucket del Data Lake
         add_partition_to_glue(tenant_id, factura_final['fecha'], S3_BUCKET_NAME) 
+
+        # ## --- NUEVA LÓGICA: Invocar la Lambda de reparación de Athena --- ##
+        try:
+            if ATHENA_REPAIR_LAMBDA_NAME:
+                # Invoca la Lambda de AthenaRepairTableFacturas de forma asíncrona (no espera respuesta)
+                lambda_client.invoke(
+                    FunctionName=ATHENA_REPAIR_LAMBDA_NAME,
+                    InvocationType='Event', # 'Event' es asíncrono, 'RequestResponse' es síncrono
+                    Payload=json.dumps({"detail": "new_invoice_created", "factura_id": factura_id})
+                )
+                logger.info(f"Lambda {ATHENA_REPAIR_LAMBDA_NAME} invocada exitosamente de forma asíncrona para factura {factura_id}.")
+            else:
+                logger.warning("ATHENA_REPAIR_LAMBDA_NAME no está configurada. No se invocará la Lambda de reparación.")
+        except Exception as e:
+            logger.error(f"Error al invocar la Lambda {ATHENA_REPAIR_LAMBDA_NAME}: {str(e)}", exc_info=True)
+
 
         logger.info("Proceso completado.")
         return {
