@@ -8,29 +8,22 @@ table = dynamodb.Table('facturas-api-dev')
 def obtener_facturas(tenant_id, skip=0, limit=10, usuario_id=None):
     """Obtiene facturas de DynamoDB con paginación y filtros"""
     try:
-        
+        # Obtener todas las facturas del tenant
+        response = table.query(
+            KeyConditionExpression='tenant_id = :tenant_id',
+            ExpressionAttributeValues={
+                ':tenant_id': tenant_id
+            },
+            Limit=limit
+        )
+        facturas = response.get('Items', [])
+        # Filtrar por usuario_id si se proporciona
         if usuario_id:
-            # Filtrar por usuario específico
-            response = table.query(
-                KeyConditionExpression='tenant_id = :tenant_id',
-                FilterExpression='usuario_id = :usuario_id',
-                ExpressionAttributeValues={
-                    ':tenant_id': tenant_id,
-                    ':usuario_id': usuario_id
-                },
-                Limit=limit
-            )
-        else:
-            # Obtener todas las facturas del tenant
-            response = table.query(
-                KeyConditionExpression='tenant_id = :tenant_id',
-                ExpressionAttributeValues={
-                    ':tenant_id': tenant_id
-                },
-                Limit=limit
-            )
-        
-        return response.get('Items', [])
+            facturas = [
+                factura for factura in facturas
+                if factura.get('usuario_info', {}).get('id') == usuario_id
+            ]
+        return facturas
     except Exception as e:
         return {'error': f"Error al obtener facturas: {str(e)}"}
 
