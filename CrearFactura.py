@@ -89,7 +89,14 @@ def lambda_handler(event, context):
         productos_req = body.get('productos')
 
         if not all([tenant_id, usuario_id, productos_req]):
-            return {"statusCode": 400, "body": json.dumps({"error": "Faltan campos: 'tenant_id', 'usuario_id', 'productos'."})}
+            return {
+                "statusCode": 400,
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*"
+                },
+                "body": json.dumps({"error": "Faltan campos: 'tenant_id', 'usuario_id', 'productos'."})
+            }
         
         # --- 2. Enriquecer y Validar Datos Estrictamente ---
         logger.info("Paso 2: Enriqueciendo y validando datos desde servicios externos.")
@@ -99,7 +106,14 @@ def lambda_handler(event, context):
         if not (usuario_info_respuesta and 'user' in usuario_info_respuesta):
             error_msg = f"Usuario con ID '{usuario_id}' no encontrado para el tenant '{tenant_id}'."
             logger.error(error_msg)
-            return {"statusCode": 404, "body": json.dumps({"error": error_msg})}
+            return {
+                "statusCode": 404,
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*"
+                },
+                "body": json.dumps({"error": error_msg})
+            }
         
         usuario_info = usuario_info_respuesta['user']
         logger.info(f"Usuario {usuario_id} encontrado: {usuario_info.get('nombres')}")
@@ -126,7 +140,14 @@ def lambda_handler(event, context):
             if not (producto_info_respuesta and 'product' in producto_info_respuesta):
                 error_msg = f"Producto con ID '{prod_id}' no encontrado para el tenant '{tenant_id}'."
                 logger.error(error_msg)
-                return {"statusCode": 404, "body": json.dumps({"error": error_msg})}
+                return {
+                    "statusCode": 404,
+                    "headers": {
+                        "Content-Type": "application/json",
+                        "Access-Control-Allow-Origin": "*"
+                    },
+                    "body": json.dumps({"error": error_msg})
+                }
 
             producto_real = producto_info_respuesta['product']
             logger.info(f"Producto {prod_id} encontrado: {producto_real.get('nombre')}")
@@ -181,10 +202,9 @@ def lambda_handler(event, context):
         # ## --- NUEVA LÓGICA: Invocar la Lambda de reparación de Athena --- ##
         try:
             if ATHENA_REPAIR_LAMBDA_NAME:
-                # Invoca la Lambda de AthenaRepairTableFacturas de forma asíncrona (no espera respuesta)
                 lambda_client.invoke(
                     FunctionName=ATHENA_REPAIR_LAMBDA_NAME,
-                    InvocationType='Event', # 'Event' es asíncrono, 'RequestResponse' es síncrono
+                    InvocationType='Event',
                     Payload=json.dumps({"detail": "new_invoice_created", "factura_id": factura_id})
                 )
                 logger.info(f"Lambda {ATHENA_REPAIR_LAMBDA_NAME} invocada exitosamente de forma asíncrona para factura {factura_id}.")
@@ -193,17 +213,33 @@ def lambda_handler(event, context):
         except Exception as e:
             logger.error(f"Error al invocar la Lambda {ATHENA_REPAIR_LAMBDA_NAME}: {str(e)}", exc_info=True)
 
-
         logger.info("Proceso completado.")
         return {
             'statusCode': 201,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
             'body': json.dumps({'mensaje': 'Factura creada, enriquecida y archivada exitosamente', 'factura': factura_final}, cls=DecimalEncoder, indent=2)
         }
 
     except json.JSONDecodeError as e:
         logger.error(f"Error de parseo JSON: {str(e)}")
-        return {"statusCode": 400, "body": json.dumps({"error": "Cuerpo de la petición no es un JSON válido."})}
+        return {
+            "statusCode": 400,
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*"
+            },
+            "body": json.dumps({"error": "Cuerpo de la petición no es un JSON válido."})
+        }
     except Exception as e:
         logger.error(f"Error inesperado durante la ejecución: {str(e)}", exc_info=True)
-        return {"statusCode": 500, "body": json.dumps({"error": "Ocurrió un error interno en el servidor."})}
+        return {
+            "statusCode": 500,
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*"
+            },
+            "body": json.dumps({"error": "Ocurrió un error interno en el servidor."})
+        }

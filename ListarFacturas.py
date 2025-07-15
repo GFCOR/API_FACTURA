@@ -3,7 +3,7 @@ import boto3
 
 # Cliente de DynamoDB
 dynamodb = boto3.resource('dynamodb')
-table = dynamodb.Table('Facturas')
+table = dynamodb.Table('facturas-api-dev')
 
 def obtener_facturas(tenant_id, skip=0, limit=10, usuario_id=None):
     """Obtiene facturas de DynamoDB con paginación y filtros"""
