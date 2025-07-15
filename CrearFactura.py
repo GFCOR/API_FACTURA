@@ -7,397 +7,176 @@ import os
 import logging
 from decimal import Decimal
 
-# Configurar logging para CloudWatch
+# --- Configuración Inicial ---
+
+# 1. Configurar logging detallado para CloudWatch
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Cliente de DynamoDB
-dynamodb = boto3.resource('dynamodb')
-table = dynamodb.Table('facturas-api-dev')
+# 2. Inicializar clientes de AWS (se reutilizarán)
+try:
+    dynamodb_resource = boto3.resource('dynamodb')
+    s3_client = boto3.client('s3')
+    http = urllib3.PoolManager()
+except Exception as e:
+    logger.error(f"Error inicializando clientes de AWS: {str(e)}")
+    raise e
 
-# Cliente HTTP para llamadas externas (urllib3 viene con boto3)
-http = urllib3.PoolManager()
+# 3. Obtener configuración desde Variables de Entorno (¡IMPORTANTE!)
+#    Debes configurar estas variables en tu función Lambda.
+DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME', 'facturas-api-dev')
+S3_BUCKET_NAME = "pf-facturas-sergio" # ¡Añade esta variable!
+USUARIO_LAMBDA_URL = "https://30ipk5jpl6.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener"
+PRODUCTO_LAMBDA_URL = "https://1kobbmlfu9.execute-api.us-east-1.amazonaws.com/dev/productos/obtener"
 
-# URLs de las lambdas (configurar como variables de entorno)
-USUARIO_LAMBDA_URL = os.environ.get('USUARIO_LAMBDA_URL', 'https://6mgsre8wyb.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener')
-PRODUCTO_LAMBDA_URL = os.environ.get('PRODUCTO_LAMBDA_URL', 'https://ngjoc04j00.execute-api.us-east-1.amazonaws.com/dev/productos/obtener')
 
-def obtener_datos_usuario(usuario_id, tenant_id):
-    """Obtiene datos del usuario desde otra función Lambda"""
-    logger.info(f"🔍 PROCESO: Iniciando obtención de datos del usuario {usuario_id} para tenant {tenant_id}")
-    
+# --- Funciones de Ayuda (Llamadas a otros servicios y conversiones) ---
+
+def obtener_datos_externos(url, method='POST', data=None):
+    """Función genérica para llamar a otras Lambdas/APIs."""
     try:
-        data = {
-            'tenant_id': tenant_id,
-            'id': usuario_id
-        }
+        headers = {'Content-Type': 'application/json'}
+        encoded_data = json.dumps(data).encode('utf-8') if data else None
         
-        logger.info(f"📤 ENVIANDO: Request a servicio usuarios - URL: {USUARIO_LAMBDA_URL}")
-        logger.info(f"📤 PAYLOAD: {json.dumps(data)}")
+        response = http.request(method, url, body=encoded_data, headers=headers, timeout=10.0)
         
-        encoded_data = json.dumps(data).encode('utf-8')
-        
-        response = http.request(
-            'POST',
-            USUARIO_LAMBDA_URL,
-            body=encoded_data,
-            headers={'Content-Type': 'application/json'},
-            timeout=30.0
-        )
-        
-        logger.info(f"📥 RESPUESTA: HTTP Status {response.status} del servicio usuarios")
-        
+        logger.info(f"Respuesta de {url}: Status {response.status}")
         if response.status == 200:
-            user_data = json.loads(response.data.decode('utf-8'))
-            logger.info(f"✅ ÉXITO: Usuario obtenido correctamente - Nombre: {user_data.get('nombres', 'N/A')} {user_data.get('apellidos', 'N/A')}")
-            return user_data
+            return json.loads(response.data.decode('utf-8'))
         else:
-            logger.warning(f"⚠️ ERROR HTTP: Servicio usuarios respondió con status {response.status}")
-            logger.warning(f"⚠️ RESPUESTA COMPLETA: {response.data.decode('utf-8')}")
+            logger.warning(f"Error en llamada a {url}: {response.data.decode('utf-8')}")
             return None
-            
-    except urllib3.exceptions.TimeoutError:
-        logger.error(f"⏰ TIMEOUT: El servicio de usuarios no respondió en 30 segundos")
-        return None
-    except urllib3.exceptions.MaxRetryError:
-        logger.error(f"🔌 CONEXIÓN: No se pudo conectar al servicio de usuarios")
-        return None
     except Exception as e:
-        logger.error(f"💥 EXCEPCIÓN: Error inesperado en servicio usuarios - {str(e)}")
+        logger.error(f"Excepción al llamar a {url}: {str(e)}")
         return None
-
-def obtener_datos_producto(producto_id, tenant_id):
-    """Obtiene datos del producto desde otra función Lambda usando GET y query params"""
-    logger.info(f"🔍 PROCESO: Iniciando obtención de datos del producto {producto_id} para tenant {tenant_id}")
-
-    try:
-        # Construir la URL con los parámetros
-        url = f"{PRODUCTO_LAMBDA_URL}/productos/obtener?tenant_id={tenant_id}&id_producto={producto_id}"
-        logger.info(f"📤 ENVIANDO: Request a servicio productos - URL: {url}")
-
-        response = http.request(
-            'GET',
-            url,
-            headers={'Content-Type': 'application/json'},
-            timeout=30.0
-        )
-
-        logger.info(f"📥 RESPUESTA: HTTP Status {response.status} del servicio productos")
-
-        if response.status == 200:
-            product_data = json.loads(response.data.decode('utf-8'))
-            logger.info(f"✅ ÉXITO: Producto obtenido correctamente - Nombre: {product_data.get('nombre', 'N/A')}, Precio: {product_data.get('precio', 'N/A')}")
-            return product_data
-        else:
-            logger.warning(f"⚠️ ERROR HTTP: Servicio productos respondió con status {response.status}")
-            logger.warning(f"⚠️ RESPUESTA COMPLETA: {response.data.decode('utf-8')}")
-            return None
-
-    except urllib3.exceptions.TimeoutError:
-        logger.error(f"⏰ TIMEOUT: El servicio de productos no respondió en 30 segundos")
-        return None
-    except urllib3.exceptions.MaxRetryError:
-        logger.error(f"🔌 CONEXIÓN: No se pudo conectar al servicio de productos")
-        return None
-    except Exception as e:
-        logger.error(f"💥 EXCEPCIÓN: Error inesperado en servicio productos - {str(e)}")
-        return None
-
-def crear_factura(factura_data, tenant_id):
-    """Crea una nueva factura en DynamoDB"""
-    logger.info(f"🔍 PROCESO: Iniciando creación de factura en DynamoDB para tenant {tenant_id}")
-    
-    try:
-        factura_id = str(uuid.uuid4())
-        logger.info(f"🆔 GENERADO: Nuevo ID de factura - {factura_id}")
-        
-        # Convertir floats a Decimal para DynamoDB
-        logger.info(f"🔄 PROCESO: Convirtiendo datos a formato DynamoDB")
-        item = {
-            'tenant_id': tenant_id,
-            'factura_id': factura_id,
-            'usuario_id': factura_data['usuario_id'],
-            'productos': convert_floats_to_decimals(factura_data['productos']),
-            'total': Decimal(str(factura_data['total'])),
-            'usuario_info': factura_data['usuario_info'],
-            'fecha': factura_data['fecha'],
-            'fecha_creacion': datetime.utcnow().isoformat(),
-            'estado': factura_data.get('estado', 'activa')
-        }
-        
-        logger.info(f"💾 GUARDANDO: Insertando factura en DynamoDB - Total: ${factura_data['total']}")
-        table.put_item(Item=item)
-        
-        logger.info(f"✅ ÉXITO: Factura guardada exitosamente en DynamoDB")
-        return item  # Retornar el objeto completo en lugar de solo el ID
-    except Exception as e:
-        logger.error(f"💥 ERROR DYNAMODB: Fallo al guardar en base de datos - {str(e)}")
-        raise Exception(f"Error al crear factura en base de datos: {str(e)}")
 
 def convert_floats_to_decimals(obj):
-    """Convierte recursivamente floats a Decimals para DynamoDB"""
+    """Convierte recursivamente floats a Decimals para DynamoDB."""
     if isinstance(obj, float):
         return Decimal(str(obj))
-    elif isinstance(obj, dict):
+    if isinstance(obj, dict):
         return {k: convert_floats_to_decimals(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
+    if isinstance(obj, list):
         return [convert_floats_to_decimals(item) for item in obj]
-    else:
-        return obj
+    return obj
 
-def decimal_default(obj):
-    """Función para serializar Decimals a JSON"""
-    if isinstance(obj, Decimal):
-        return float(obj)
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+class DecimalEncoder(json.JSONEncoder):
+    """Encoder para serializar Decimals a JSON para S3."""
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return int(obj) if obj % 1 == 0 else float(obj)
+        return super(DecimalEncoder, self).default(obj)
+
+# --- Handler Principal de la Lambda ---
 
 def lambda_handler(event, context):
-    logger.info(f"🚀 INICIO: Lambda CrearFactura iniciado - Request ID: {context.aws_request_id}")
-    
+    logger.info(f"Iniciando lambda 'crear_factura_completa'. Request ID: {context.aws_request_id}")
+
+    # --- Validación de Configuración ---
+    if not all([DYNAMODB_TABLE_NAME, S3_BUCKET_NAME, USUARIO_LAMBDA_URL, PRODUCTO_LAMBDA_URL]):
+        error_msg = "Error de configuración: Faltan variables de entorno esenciales."
+        logger.error(error_msg)
+        return {"statusCode": 500, "body": json.dumps({"error": error_msg})}
+
     try:
-        # DEBUGGING: Log completo del evento
-        logger.info(f"📋 DEBUG: Evento completo recibido")
-        logger.debug(f"📋 EVENTO RAW: {json.dumps(event)}")
+        # --- 1. Parsear y Validar Input ---
+        logger.info("Paso 1: Parseando y validando input.")
+        body = json.loads(event.get('body', '{}'))
         
-        # PROCESO 1: Parsear el body del request
-        logger.info(f"🔍 PROCESO 1: Parseando body del request")
-        # Solo parsear si el body es string, si no usarlo directo
-        if 'body' in event and event['body'] is not None:
-            body = event['body']
-            logger.info(f"📋 RAW BODY RECIBIDO: {body}")
-            logger.info(f"📋 Tipo de body: {type(body)}")
-            if isinstance(body, str):
-                # Limpiar caracteres de control y saltos de línea
-                cleaned_body = body.strip().replace('\r\n', '\n').replace('\r', '\n')
-                # Eliminar todos los caracteres no imprimibles (incluyendo U+00A0)
-                import re
-                cleaned_body = re.sub(r'[\x00-\x1F\x7F\u00A0]', '', cleaned_body)
-                logger.info(f"📋 BODY LIMPIO: {cleaned_body}")
-                try:
-                    body = json.loads(cleaned_body)
-                except Exception as e:
-                    logger.warning(f"⚠️ json.loads falló: {str(e)}. Intentando ast.literal_eval...")
-                    import ast
-                    try:
-                        body = ast.literal_eval(cleaned_body)
-                        logger.info(f"✅ BODY parseado exitosamente con ast.literal_eval")
-                    except Exception as e2:
-                        logger.error(f"💥 ERROR PARSEANDO BODY: {str(e2)}")
-                        return {
-                            'statusCode': 400,
-                            'headers': {
-                                'Content-Type': 'application/json',
-                                'Access-Control-Allow-Origin': '*'
-                            },
-                            'body': json.dumps({
-                                'error': 'PROCESO 1 FALLÓ: El body del request no es JSON válido',
-                                'detalle': f'Error de parseo: json.loads: {str(e)} | ast.literal_eval: {str(e2)}',
-                                'raw_body': cleaned_body
-                            }, indent=2, ensure_ascii=False)
-                        }
-        else:
-            body = event
-        logger.info(f"✅ Body recibido y procesado como dict")
-        logger.info(f"📊 DATOS FINALES: {json.dumps(body, default=str)}")
+        tenant_id = body.get('tenant_id')
+        usuario_id = body.get('usuario_id')
+        productos_req = body.get('productos')
 
-        # PROCESO 2: Validar campos requeridos
-        logger.info(f"🔍 PROCESO 2: Validando campos requeridos")
+        if not all([tenant_id, usuario_id, productos_req]):
+            return {"statusCode": 400, "body": json.dumps({"error": "Faltan campos: 'tenant_id', 'usuario_id', 'productos'."})}
         
-        campos_requeridos = ['tenant_id', 'usuario_id', 'productos']
-        for campo in campos_requeridos:
-            if campo not in body:
-                logger.error(f"💥 ERROR 2: Campo requerido faltante - {campo}")
-                return {
-                    'statusCode': 400,
-                    'headers': {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*'
-                    },
-                    'body': json.dumps({
-                        'error': f'PROCESO 2 FALLÓ: Campo requerido faltante - {campo}',
-                        'detalle': f'El campo "{campo}" es obligatorio para crear una factura',
-                        'proceso_fallido': 'Validación de campos requeridos',
-                        'campos_recibidos': list(body.keys()),
-                        'campos_requeridos': campos_requeridos
-                    }, indent=2, ensure_ascii=False)
-                }
+        # --- 2. Enriquecer Datos (Llamadas a otros servicios) ---
+        logger.info("Paso 2: Enriqueciendo datos desde servicios externos.")
         
-        logger.info(f"✅ ÉXITO 2: Todos los campos requeridos están presentes")
+        # Obtener datos del usuario
+        usuario_info = obtener_datos_externos(USUARIO_LAMBDA_URL, data={'tenant_id': tenant_id, 'id': usuario_id})
+        if not usuario_info:
+            usuario_info = {'id': usuario_id, 'nombre': 'Usuario no disponible', 'error': True}
 
-        # PROCESO 3: Extraer y validar datos
-        logger.info(f"🔍 PROCESO 3: Extrayendo datos del request")
-        
-        tenant_id = body['tenant_id']
-        usuario_id = body['usuario_id']
-        productos = body['productos']
-        
-        logger.info(f"📊 DATOS EXTRAÍDOS: Tenant={tenant_id}, Usuario={usuario_id}, Productos={len(productos)}")
-        
-        if not isinstance(productos, list) or len(productos) == 0:
-            logger.error(f"💥 ERROR 3: Lista de productos inválida")
-            return {
-                'statusCode': 400,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                },
-                'body': json.dumps({
-                    'error': 'PROCESO 3 FALLÓ: Lista de productos inválida',
-                    'detalle': 'La lista de productos debe ser un array no vacío',
-                    'proceso_fallido': 'Validación de estructura de datos',
-                    'productos_recibidos': productos
-                }, indent=2, ensure_ascii=False)
-            }
-        
-        logger.info(f"✅ ÉXITO 3: Datos extraídos y validados correctamente")
-        
-        total = 0.0
-        productos_obj = []
+        # Procesar productos y calcular total
+        total_factura = Decimal('0.0')
+        productos_procesados = []
         productos_fallidos = []
 
-        # PROCESO 4: Obtener datos del usuario
-        logger.info(f"🔍 PROCESO 4: Obteniendo información del usuario")
-        
-        usuario_info = obtener_datos_usuario(usuario_id, tenant_id)
-        if usuario_info is None:
-            logger.warning(f"⚠️ ADVERTENCIA 4: No se pudo obtener datos del usuario, usando fallback")
-            # Usar datos fallback si el servicio falla
-            usuario_info = {
-                'id': usuario_id,
-                'nombre': 'Usuario no disponible',
-                'email': 'no-disponible@temp.com',
-                'disponible': False,
-                'error': 'Servicio de usuarios no disponible'
-            }
-        else:
-            logger.info(f"✅ ÉXITO 4: Datos del usuario obtenidos correctamente")
-
-        # PROCESO 5: Procesar cada producto
-        logger.info(f"🔍 PROCESO 5: Procesando {len(productos)} productos")
-        
-        for i, producto in enumerate(productos, 1):
-            logger.info(f"🔍 PROCESO 5.{i}: Procesando producto {producto.get('id', 'SIN_ID')}")
+        for prod_req in productos_req:
+            prod_id = prod_req.get('id')
+            cantidad = prod_req.get('cantidad', 1)
             
-            if 'id' not in producto or 'cantidad' not in producto:
-                logger.error(f"💥 ERROR 5.{i}: Producto mal formateado")
-                return {
-                    'statusCode': 400,
-                    'headers': {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*'
-                    },
-                    'body': json.dumps({
-                        'error': f'PROCESO 5.{i} FALLÓ: Producto mal formateado',
-                        'detalle': 'Cada producto debe tener "id" y "cantidad"',
-                        'proceso_fallido': f'Validación de producto #{i}',
-                        'producto_problematico': producto
-                    }, indent=2, ensure_ascii=False)
-                }
+            producto_info = obtener_datos_externos(f"{PRODUCTO_LAMBDA_URL}?tenant_id={tenant_id}&id_producto={prod_id}", method='GET')
             
-            producto_info = obtener_datos_producto(producto['id'], tenant_id)
-            
-            if producto_info is None:
-                logger.warning(f"⚠️ ADVERTENCIA 5.{i}: Producto no encontrado, usando fallback")
-                productos_fallidos.append(producto['id'])
-                producto_obj_fallback = {
-                    'id_prod': producto['id'],
-                    'precio_unitario': Decimal('0.0'),
-                    'cantidad': int(producto['cantidad']),
-                    'subtotal': Decimal('0.0'),
-                    'nombre': 'Producto no disponible',
-                    'disponible': False
-                }
-                productos_obj.append(producto_obj_fallback)
-            else:
-                logger.info(f"✅ ÉXITO 5.{i}: Producto procesado correctamente")
-                # Producto obtenido correctamente
+            if producto_info:
                 precio_unitario = Decimal(str(producto_info.get('precio', 0)))
-                cantidad = int(producto['cantidad'])
-                subtotal = precio_unitario * cantidad
-                total += float(subtotal)  # Sumar como float para el cálculo
+                subtotal = precio_unitario * Decimal(cantidad)
+                total_factura += subtotal
                 
-                producto_obj = {
-                    'id_prod': producto_info.get('id', producto['id']),
+                productos_procesados.append({
+                    'id_prod': prod_id,
+                    'nombre': producto_info.get('nombre', 'Producto sin nombre'),
                     'precio_unitario': precio_unitario,
                     'cantidad': cantidad,
-                    'subtotal': subtotal,
-                    'nombre': producto_info.get('nombre', 'Producto'),
-                    'disponible': True
-                }
-                productos_obj.append(producto_obj)
+                    'subtotal': subtotal
+                })
+            else:
+                productos_fallidos.append(prod_id)
 
-        logger.info(f"✅ ÉXITO 5: Todos los productos procesados - Total calculado: ${total}")
+        # --- 3. Ensamblar el Objeto Final de la Factura ---
+        logger.info("Paso 3: Ensamblando objeto final de la factura.")
         
-        # Log si hubo productos fallidos
-        if productos_fallidos:
-            logger.warning(f"⚠️ ADVERTENCIA: {len(productos_fallidos)} productos fallidos: {productos_fallidos}")
+        factura_id = str(uuid.uuid4())
+        fecha_actual = datetime.utcnow()
 
-        # PROCESO 6: Ensamblar datos de la factura
-        logger.info(f"🔍 PROCESO 6: Ensamblando datos de la factura")
-        
-        factura = {
-            "usuario_id": usuario_id,
-            "productos": productos_obj,
-            "total": total,
-            "usuario_info": usuario_info,
-            "fecha": body.get('fecha', datetime.utcnow().strftime('%Y-%m-%d')),
-            "estado": "activa",
-            "productos_fallidos": productos_fallidos if productos_fallidos else []
+        factura_final = {
+            'factura_id': factura_id,
+            'tenant_id': tenant_id,
+            'fecha': fecha_actual.strftime('%Y-%m-%d'),
+            'fecha_creacion': fecha_actual.isoformat(),
+            'usuario_info': usuario_info,
+            'productos': productos_procesados,
+            'total': total_factura,
+            'estado': 'activa',
+            'productos_fallidos': productos_fallidos
         }
         
-        logger.info(f"✅ ÉXITO 6: Datos de factura ensamblados correctamente")
-
-        # PROCESO 7: Guardar en DynamoDB
-        logger.info(f"🔍 PROCESO 7: Guardando factura en base de datos")
+        # Convertir todos los floats/ints a Decimal para DynamoDB
+        factura_dynamodb = convert_floats_to_decimals(factura_final)
         
-        try:
-            factura_creada = crear_factura(factura, tenant_id)
-            logger.info(f"✅ ÉXITO 7: Factura guardada exitosamente - ID: {factura_creada['factura_id']}")
-        except Exception as e:
-            logger.error(f"💥 ERROR 7: Fallo al guardar en base de datos - {str(e)}")
-            return {
-                'statusCode': 500,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                },
-                'body': json.dumps({
-                    'error': 'Error al crear la factura',
-                    'detalle': f'No se pudo guardar la factura en DynamoDB: {str(e)}',
-                    'factura_data': {
-                        'total': total,
-                        'productos_count': len(productos_obj),
-                        'tenant_id': tenant_id
-                    }
-                }, indent=2, ensure_ascii=False)
-            }
-        # PROCESO 8: Respuesta exitosa
-        logger.info(f"🎉 PROCESO 8: Generando respuesta exitosa")
-        logger.info(f"🏁 FINAL: Factura creada completamente - ID: {factura_creada['factura_id']}, Total: ${total}")
+        # --- 4. Guardar en DynamoDB (Fuente de la verdad) ---
+        logger.info(f"Paso 4: Guardando factura {factura_id} en DynamoDB.")
+        table = dynamodb_resource.Table(DYNAMODB_TABLE_NAME)
+        table.put_item(Item=factura_dynamodb)
+        logger.info("Guardado en DynamoDB exitoso.")
+
+        # --- 5. Archivar en S3 (Respaldo histórico) ---
+        logger.info(f"Paso 5: Archivando factura {factura_id} en S3.")
+        s3_key = f"{tenant_id}/facturas/{factura_final['fecha']}/{factura_id}.json"
+        
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key,
+            Body=json.dumps(factura_final, cls=DecimalEncoder, indent=2, ensure_ascii=False),
+            ContentType="application/json"
+        )
+        logger.info(f"Archivado en S3 exitoso en la ruta: s3://{S3_BUCKET_NAME}/{s3_key}")
+
+        # --- 6. Devolver Respuesta Exitosa ---
+        logger.info("Proceso completado.")
         return {
             'statusCode': 201,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
             'body': json.dumps({
-                'mensaje': 'Factura creada exitosamente',
-                'factura': factura_creada
-            }, default=decimal_default, indent=2, ensure_ascii=False)
+                'mensaje': 'Factura creada, enriquecida y archivada exitosamente',
+                'factura': factura_final
+            }, cls=DecimalEncoder)
         }
 
+    except json.JSONDecodeError as e:
+        logger.error(f"Error de parseo JSON: {str(e)}")
+        return {"statusCode": 400, "body": json.dumps({"error": "Cuerpo de la petición no es un JSON válido."})}
     except Exception as e:
-        logger.error(f"💥 ERROR CRÍTICO: Fallo inesperado del sistema - {str(e)}")
-        return {
-            'statusCode': 500,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
-            'body': json.dumps({
-                'error': 'ERROR CRÍTICO DEL SISTEMA',
-                'detalle': f'Fallo inesperado no controlado: {str(e)}',
-                'proceso_fallido': 'Sistema general',
-                'request_id': context.aws_request_id if context else 'N/A'
-            }, indent=2, ensure_ascii=False)
-        }
+        logger.error(f"Error inesperado durante la ejecución: {str(e)}", exc_info=True)
+        return {"statusCode": 500, "body": json.dumps({"error": "Ocurrió un error interno en el servidor."})}
