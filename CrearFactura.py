@@ -22,23 +22,22 @@ except Exception as e:
     logger.error(f"Error inicializando clientes de AWS: {str(e)}")
     raise e
 
-# 3. Obtener configuración desde Variables de Entorno
-#    (Usando os.environ.get es la mejor práctica, pero tu método también funciona)
+# 3. Obtener configuración
+#    (Recomendación: Mueve estas URLs a variables de entorno para más flexibilidad)
 DYNAMODB_TABLE_NAME = 'facturas-api-dev'
 S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'pf-facturas-sergio')
 USUARIO_LAMBDA_URL = 'https://30ipk5jpl6.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener'
 PRODUCTO_LAMBDA_URL = 'https://1kobbmlfu9.execute-api.us-east-1.amazonaws.com/dev/productos/obtener'
 
-# --- Funciones de Ayuda (Llamadas a otros servicios y conversiones) ---
+# --- Funciones de Ayuda ---
+# (Estas funciones están bien, no necesitan cambios)
 
 def obtener_datos_externos(url, method='POST', data=None):
     """Función genérica para llamar a otras Lambdas/APIs."""
     try:
         headers = {'Content-Type': 'application/json'}
         encoded_data = json.dumps(data).encode('utf-8') if data else None
-        
         response = http.request(method, url, body=encoded_data, headers=headers, timeout=10.0)
-        
         logger.info(f"Respuesta de {url}: Status {response.status}")
         if response.status == 200:
             return json.loads(response.data.decode('utf-8'))
@@ -50,17 +49,12 @@ def obtener_datos_externos(url, method='POST', data=None):
         return None
 
 def convert_floats_to_decimals(obj):
-    """Convierte recursivamente floats a Decimals para DynamoDB."""
-    if isinstance(obj, float):
-        return Decimal(str(obj))
-    if isinstance(obj, dict):
-        return {k: convert_floats_to_decimals(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [convert_floats_to_decimals(item) for item in obj]
+    if isinstance(obj, float): return Decimal(str(obj))
+    if isinstance(obj, dict): return {k: convert_floats_to_decimals(v) for k, v in obj.items()}
+    if isinstance(obj, list): return [convert_floats_to_decimals(item) for item in obj]
     return obj
 
 class DecimalEncoder(json.JSONEncoder):
-    """Encoder para serializar Decimals a JSON para S3."""
     def default(self, obj):
         if isinstance(obj, Decimal):
             return int(obj) if obj % 1 == 0 else float(obj)
@@ -71,17 +65,10 @@ class DecimalEncoder(json.JSONEncoder):
 def lambda_handler(event, context):
     logger.info(f"Iniciando lambda 'crear_factura_completa'. Request ID: {context.aws_request_id}")
 
-    # --- Validación de Configuración ---
-    if not all([DYNAMODB_TABLE_NAME, S3_BUCKET_NAME, USUARIO_LAMBDA_URL, PRODUCTO_LAMBDA_URL]):
-        error_msg = "Error de configuración: Faltan variables de entorno esenciales."
-        logger.error(error_msg)
-        return {"statusCode": 500, "body": json.dumps({"error": error_msg})}
-
     try:
         # --- 1. Parsear y Validar Input ---
         logger.info("Paso 1: Parseando y validando input.")
         body = json.loads(event.get('body', '{}'))
-        
         tenant_id = body.get('tenant_id')
         usuario_id = body.get('usuario_id')
         productos_req = body.get('productos')
@@ -92,16 +79,32 @@ def lambda_handler(event, context):
         # --- 2. Enriquecer Datos (Llamadas a otros servicios) ---
         logger.info("Paso 2: Enriqueciendo datos desde servicios externos.")
         
-        # Obtener datos del usuario
+        # ## --- CORRECCIÓN DE ESQUEMA PARA USUARIO_INFO --- ##
         usuario_info_respuesta = obtener_datos_externos(USUARIO_LAMBDA_URL, data={'tenant_id': tenant_id, 'id': usuario_id})
-        # ** CORRECCIÓN 1: Extraer el objeto 'user' de la respuesta **
+
         if usuario_info_respuesta and 'user' in usuario_info_respuesta:
             usuario_info = usuario_info_respuesta['user']
+            # Añadimos un campo para saber si la información es completa
+            usuario_info['error'] = False 
             logger.info(f"Usuario {usuario_id} encontrado: {usuario_info.get('nombres')}")
         else:
-            usuario_info = {'id': usuario_id, 'nombre': 'Usuario no disponible', 'error': True}
-            logger.warning(f"No se pudo obtener información para el usuario {usuario_id}.")
-
+            logger.warning(f"No se pudo obtener información para el usuario {usuario_id}. Usando fallback con esquema consistente.")
+            # Creamos un objeto con la MISMA ESTRUCTURA que un usuario exitoso
+            usuario_info = {
+                'tenant_id': tenant_id,
+                'telefono': None,
+                'fecha_registro': None,
+                'apellidos': None,
+                'email': None,
+                'rol': None,
+                'id': usuario_id,
+                'direccion': None,
+                'nombres': 'Usuario no disponible',
+                'error': True # Campo para indicar que los datos son de fallback
+            }
+        
+        # El resto del código no necesita cambios, ya que el manejo de productos era consistente.
+        
         # Procesar productos y calcular total
         total_factura = Decimal('0.0')
         productos_procesados = []
@@ -114,7 +117,6 @@ def lambda_handler(event, context):
             logger.info(f"Obteniendo datos para producto: {prod_id}")
             producto_info_respuesta = obtener_datos_externos(f"{PRODUCTO_LAMBDA_URL}?tenant_id={tenant_id}&id_producto={prod_id}", method='GET')
             
-            # ** CORRECCIÓN 2: Extraer el objeto 'product' de la respuesta **
             if producto_info_respuesta and 'product' in producto_info_respuesta:
                 producto_real = producto_info_respuesta['product']
                 logger.info(f"Producto {prod_id} encontrado: {producto_real.get('nombre')}")
@@ -155,13 +157,13 @@ def lambda_handler(event, context):
         
         factura_dynamodb = convert_floats_to_decimals(factura_final)
         
-        # --- 4. Guardar en DynamoDB (Fuente de la verdad) ---
+        # --- 4. Guardar en DynamoDB ---
         logger.info(f"Paso 4: Guardando factura {factura_id} en DynamoDB.")
         table = dynamodb_resource.Table(DYNAMODB_TABLE_NAME)
         table.put_item(Item=factura_dynamodb)
         logger.info("Guardado en DynamoDB exitoso.")
 
-        # --- 5. Archivar en S3 (Respaldo histórico) ---
+        # --- 5. Archivar en S3 ---
         logger.info(f"Paso 5: Archivando factura {factura_id} en S3.")
         s3_key = f"{tenant_id}/facturas/{factura_final['fecha']}/{factura_id}.json"
         
@@ -178,10 +180,7 @@ def lambda_handler(event, context):
         return {
             'statusCode': 201,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({
-                'mensaje': 'Factura creada, enriquecida y archivada exitosamente',
-                'factura': factura_final
-            }, cls=DecimalEncoder, indent=2)
+            'body': json.dumps({'mensaje': 'Factura creada, enriquecida y archivada exitosamente', 'factura': factura_final}, cls=DecimalEncoder, indent=2)
         }
 
     except json.JSONDecodeError as e:
