@@ -24,10 +24,10 @@ except Exception as e:
 
 # 3. Obtener configuración desde Variables de Entorno
 #    (Usando os.environ.get es la mejor práctica, pero tu método también funciona)
-DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME', 'facturas-api-dev')
+DYNAMODB_TABLE_NAME = 'facturas-api-dev'
 S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'pf-facturas-sergio')
-USUARIO_LAMBDA_URL = os.environ.get('USUARIO_LAMBDA_URL', 'https://30ipk5jpl6.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener')
-PRODUCTO_LAMBDA_URL = os.environ.get('PRODUCTO_LAMBDA_URL', 'https://1kobbmlfu9.execute-api.us-east-1.amazonaws.com/dev/productos/obtener')
+USUARIO_LAMBDA_URL = 'https://30ipk5jpl6.execute-api.us-east-1.amazonaws.com/dev/usuarios/obtener'
+PRODUCTO_LAMBDA_URL = 'https://1kobbmlfu9.execute-api.us-east-1.amazonaws.com/dev/productos/obtener'
 
 # --- Funciones de Ayuda (Llamadas a otros servicios y conversiones) ---
 
